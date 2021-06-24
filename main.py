@@ -5,83 +5,6 @@ from hashlib import sha1,md5
 from random import randint
 
 
-
-class Nodes(object):
-    def __init__(self):
-        self.cmds = []
-        self.nodes = {}
-
-    def convertToArray(self,key,values):
-        data = {}
-        for i,value in enumerate(values):
-            for attr,value in value.items():
-                _key = '{}.{}.{}'.format(key,i,attr)
-                data[_key] = value
-        return data
-
-    def fromDictToDockerCmd(self,data):
-        envs = ""
-        for key,value in data.items():
-            envs += " -e {}={}".format(key,value)
-        return envs
-
-    def storage(self,**kwargs):
-        node_id = kwargs.get('node_id')
-        self.nodes[node_id] = kwargs
-        network = kwargs.get('network','mynet')
-        envs = {
-                'RABBITMQ_HOST':kwargs.get("rabbitmq_host"),
-                'NODE_ID':node_id,
-                'LOADER_BALANCER':kwargs.get('load_balancer'),
-                'REPLICATION_FACTOR':kwargs.get('replication_factor'),
-                'POOL_ID':kwargs.get('pool_id'),
-                'STORAGE_PATH':kwargs.get('storage_path'),
-                #'STORAGE_NODES':kwargs.get('storage_nodes',[]),
-                'HEARTBEAT_TIME':kwargs.get('heartbeat_time',1)
-        }
-        storage_nodes = self.convertToArray("STORAGE_NODES",kwargs.get("storage_nodes",[]))
-        envs = {**envs, **storage_nodes}
-        envs_cmd = self.fromDictToDockerCmd(envs)
-        cmd = "docker run --name {} -d --network {} -l {}".format(node_id,network,'storage')
-        cmd += envs_cmd + " nachocode/storage-node"
-        self.cmds.append(cmd)
-
-        #print(storage_nodes)
-
-    def bully(self,**kwargs):
-        node_id = kwargs.get('node_id')
-        self.nodes[node_id] = kwargs
-        network = kwargs.get('network','mynet')
-        envs = {
-                'RABBITMQ_HOST':kwargs.get("rabbitmq_host"),
-                'NODE_ID':node_id,
-                'NODE':kwargs.get('node'),
-                'PRIORITY':kwargs.get('priority'),
-                'POOL_ID':kwargs.get('pool_id'),
-                "IS_LEADER":kwargs.get('is_leader'),
-                'LEADER_NODE':kwargs.get('leader_node'),
-                'SHADOW_LEADER_NODE':kwargs.get('shadow_leader'),
-                'MAX_RETRIES':10,
-                'MAX_RETRIES_OK_MESSAGES':10,
-                'HEALTH_CHECK_TIME':3000
-        }
-        bully_nodes =self.convertToArray("BULLY_NODES",kwargs.get("bully_nodes"))
-        print(bully_nodes)
-        envs = {**envs, **bully_nodes}
-        envs_cmd = self.fromDictToDockerCmd(envs)
-        
-        cmd = "docker run --name {} -d --network {} -l {}".format(node_id,network,'bully')
-        cmd += envs_cmd + " nachocode/bully-node"
-        self.cmds.append(cmd)
-    def run(self):
-        for cmd in self.cmds:
-            p = subprocess.Popen(cmd.split(),stdout = subprocess.PIPE)
-            output,error =  p.communicate()
-            print(output,error)
-
-        #print(output)
-        #print(error)
-
 def fromDictToDockerCmd(data):
     envs = ""
     for key,value in data.items():
@@ -160,10 +83,11 @@ class StorageNode(object):
     def addVolumen(self,**kwargs):
         pass
 
-def buildBully(nodes,metadata):
-    bully_nodes       = []
-    bully_node_leader = None
-    node_leader       = None
+def buildBully(nodes,metadata,**kwargs):
+    bully_nodes        = []
+    bully_node_leader  = None
+    node_leader        = None
+    COORDINATOR_WINDOW = kwargs.get("COORDINATOR_WINDOWS",3000)
     for i,node in enumerate(nodes):
         originalNodeId = node.data["NODE_ID"]
         priority       = node.metadata['priority']
@@ -172,7 +96,7 @@ def buildBully(nodes,metadata):
         pool_id        = node.data['POOL_ID'] 
         LOG_PATH_HOST  = node.data['LOG_PATH_HOST']
         LOG_PATH_DOCKER = "/app/logs"
-        bully_node = BullyNode(NODE_ID = originalNodeId.replace("sn","cs"),PRIORITY = priority,RABBITMQ_HOST=rabbitmq_host,POOL_ID = pool_id,IS_LEADER=is_leader,NODE = originalNodeId,LOG_PATH=LOG_PATH_DOCKER,LOG_PATH_HOST=LOG_PATH_HOST,**metadata)
+        bully_node = BullyNode(NODE_ID = originalNodeId.replace("sn","cs"),PRIORITY = priority,RABBITMQ_HOST=rabbitmq_host,POOL_ID = pool_id,IS_LEADER=is_leader,NODE = originalNodeId,LOG_PATH=LOG_PATH_DOCKER,LOG_PATH_HOST=LOG_PATH_HOST,COORDINATOR_WINDOW=COORDINATOR_WINDOW,**metadata)
         bully_nodes.append(bully_node)
         if(is_leader =='true'):
             bully_node_leader = bully_node
@@ -215,7 +139,9 @@ class StorageNodeGroup(object):
             newData             = {"NODE_ID":nodeId,"STORAGE_PATH":STORAGE_PATH_DOCKER,"STORAGE_PATH_HOST":STORAGE_PATH,"LOG_PATH":LOG_PATH_DOCKER,"LOG_PATH_HOST":LOG_PATH_HOST,"PORT":PORT}
             node.build(**newData)
         self.nodes = nodesToEnv("STORAGE_NODES",self.nodes,lambda x:{'':x.data['NODE_ID']})
-        self.consensus_nodes= self.dictConsensus.get(self.consensus['algorithm'],lambda x,y:[])(self.nodes,self.consensus['metadata'])
+        #print(self.nodes)
+        self.consensus_nodes = self.dictConsensus.get(self.consensus['algorithm'],lambda x,y:[])(self.nodes,self.consensus['metadata'])
+        self.consensus_nodes = nodesToEnv("NODES",self.consensus_nodes,lambda x:{'':x.data['NODE']})
         #print(self.consensus_nodes)
         for node in self.nodes+self.consensus_nodes:
             self.cmds.append(node.generate_cmd())
@@ -229,16 +155,11 @@ if __name__ =='__main__':
     total_storage_nodes = int(sys.argv[1])
     print("TOTAL OF STORAGE_NODES = {}".format(total_storage_nodes))
 
-    #sn00 = StorageNode(STORAGE_PATH="/home/nacho/Documents/test/storage/{NODE_ID}",metadata = {'priority':0,'is_leader':'false'} )
-    #sn01 = StorageNode(STORAGE_PATH="/home/nacho/Documents/test/storage/{NODE_ID}",metadata = {'priority':1,'is_leader':'false'} )
-    #sn02 = StorageNode(STORAGE_PATH="/home/nacho/Documents/test/storage/{NODE_ID}",metadata = {'priority':2,'is_leader':'true'} )
     storages_nodes = []
     for i in range(total_storage_nodes):
-        print("STORAGE_NODE[{}]".format(i))
         is_leader = 'true' if(i==total_storage_nodes-1) else 'false'
         storages_nodes.append(StorageNode(STORAGE_PATH="/home/nacho/Documents/test/storage/{NODE_ID}",metadata = {'priority':i,'is_leader':is_leader} ))
 
-    #sn03 = StorageNode(STORAGE_PATH="/home/nacho/Documents/test/storage/{NODE_ID}",metadata = {'priority':3,'is_leader':'true'} )
 
     sns = StorageNodeGroup(
             auto_id= False,
@@ -247,7 +168,7 @@ if __name__ =='__main__':
                 "LOADER_BALANCER":"RB",
                 "network":"mynet",
                 "RABBITMQ_HOST":"10.0.0.4",
-                "HEARTBEAT_TIME":500,
+                "HEARTBEAT_TIME":250,
                 "POOL_ID":"pool-xxxx",
                 "REPLICATION_FACTOR":2,
                 "LOG_PATH":"/home/nacho/Documents/test/storage/logs"
@@ -256,8 +177,8 @@ if __name__ =='__main__':
                 'algorithm': "BULLY", # BULLY / CHORD / PAXOS / RAFT 
                 'metadata':{
                     'MAX_RETRIES':3,
-                    'MAX_RETRIES_OK_MESSAGES':10,
                     'HEALTH_CHECK_TIME':1000
+                    #'MAX_RETRIES_OK_MESSAGES':5,
                 }
             }
     )

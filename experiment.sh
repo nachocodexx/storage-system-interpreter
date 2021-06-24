@@ -18,15 +18,21 @@ do
         mkdir $SINK_FOLDER/experiment_$i
         echo "RUN DOCKER CONTAINER"
         python3 main.py $MAX_PEERS
-        sleep 5
+        sleep 2
         echo "KILL_LEADER cs-$LEADER_INDEX / sn-$LEADER_INDEX"
-        docker rm -rf cs-$LEADER_INDEX sn-$LEADER_INDEX
-        sleep 4
+        docker rm -f cs-$LEADER_INDEX sn-$LEADER_INDEX
+        sleep 10
         echo "MOVE LOG FILES to experiment_$i"
         mv ~/Documents/test/storage/logs/*.txt $SINK_FOLDER/experiment_$i
         echo "KILL STORAGE AND BULLY NODES"
-        docker rm -rf $(docker ps -f "label=storage" --format {{.ID}})
-        docker rm -rf $(docker ps -f "label=bully" --format {{.ID}})
+        docker rm -f $(docker ps -f "label=storage" --format {{.ID}})
+        docker rm -f $(docker ps -f "label=bully" --format {{.ID}})
+        echo "PURGE QUEUES"
+        for j in $(seq 0 $LEADER_INDEX) 
+        do
+                docker exec -it r00 rabbitmqctl purge_queue pool-xxxx-cs-$j
+                docker exec -it r00 rabbitmqctl purge_queue pool-xxxx-sn-$j
+        done 
         echo "___________________________________________________________________"
 done 
 
