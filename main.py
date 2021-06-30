@@ -169,6 +169,7 @@ if __name__ =='__main__':
                 "network":"mynet",
                 "RABBITMQ_HOST":"10.0.0.4",
                 "HEARTBEAT_TIME":250,
+                #"HEARTBEAT_TIME":100,
                 "POOL_ID":"pool-xxxx",
                 "REPLICATION_FACTOR":2,
                 "LOG_PATH":"/home/nacho/Documents/test/storage/logs"
